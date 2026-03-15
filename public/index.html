@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Miitel Demo App</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+      background: #f7f7f9;
+    }
+    .toolbar {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+    button {
+      padding: 10px 16px;
+      font-size: 14px;
+      cursor: pointer;
+      border: none;
+      border-radius: 8px;
+      background: #2563eb;
+      color: white;
+    }
+    .status {
+      padding: 10px 14px;
+      border-radius: 8px;
+      background: white;
+      border: 1px solid #ddd;
+      margin-bottom: 16px;
+    }
+    .log {
+      background: #111827;
+      color: #f9fafb;
+      border-radius: 8px;
+      padding: 12px;
+      min-height: 120px;
+      white-space: pre-wrap;
+      margin-bottom: 16px;
+      font-family: monospace;
+      font-size: 12px;
+    }
+    iframe {
+      width: 100%;
+      height: 720px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      background: white;
+    }
+  </style>
+</head>
+<body>
+  <h2>Miitel Demo App</h2>
+
+  <div class="toolbar">
+    <button id="loginBtn" type="button">Login</button>
+  </div>
+
+  <div class="status" id="status">Status: Not logged in</div>
+  <div class="log" id="logBox">Page loaded.\n</div>
+
+  <iframe
+    id="miitelFrame"
+    src="https://trial0195-id.miitel.jp/app/dashboard"
+    title="Miitel Dashboard">
+  </iframe>
+
+  <script>
+    const logBox = document.getElementById("logBox");
+    const statusBox = document.getElementById("status");
+
+    function log(message) {
+      console.log(message);
+      logBox.textContent += message + "\n";
+    }
+
+    async function login() {
+      try {
+        log("Login button clicked.");
+        statusBox.textContent = "Status: Sending login request...";
+
+        const res = await fetch("/api/login", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          }
+        });
+
+        log("Response status: " + res.status);
+
+        const rawText = await res.text();
+        log("Raw response: " + rawText);
+
+        if (!res.ok) {
+          statusBox.textContent = "Status: Login failed";
+          alert("Login failed. Check log.");
+          return;
+        }
+
+        const token = JSON.parse(rawText);
+
+        if (!token || !token.access_token) {
+          statusBox.textContent = "Status: Invalid token response";
+          alert("Invalid token response. Check log.");
+          return;
+        }
+
+        localStorage.setItem("demo_access_token", token.access_token || "");
+        localStorage.setItem("demo_refresh_token", token.refresh_token || "");
+        localStorage.setItem(
+          "demo_refresh_token_expires_at",
+          String(Math.floor(Date.now() / 1000) + (token.expires_in || 3600))
+        );
+        localStorage.setItem("demo_current_access_time", String(Date.now()));
+
+        log("Token saved to localStorage.");
+        statusBox.textContent = "Status: Logged in (demo)";
+
+        document.getElementById("miitelFrame").src =
+          "https://trial0195-id.miitel.jp/app/dashboard?ts=" + Date.now();
+
+      } catch (err) {
+        log("ERROR: " + err.message);
+        statusBox.textContent = "Status: Error";
+        alert("Error: " + err.message);
+      }
+    }
+
+    document.getElementById("loginBtn").addEventListener("click", login);
+    log("Login handler attached.");
+  </script>
+</body>
+</html>
