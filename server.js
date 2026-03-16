@@ -1,6 +1,6 @@
 import express from "express";
 import cookieParser from "cookie-parser";
-import { createProxyMiddleware } from "http-proxy-middleware";
+import { createProxyMiddleware, responseInterceptor } from "http-proxy-middleware";
 import path from "path";
 
 const TENANT = "trial0195-id";
@@ -63,7 +63,7 @@ app.use((req, res, next) => {
   if (req.path === "/" || req.path.startsWith("/_")) {
     // Block inline scripts except our own (nonce would be better for production)
     res.setHeader("Content-Security-Policy",
-      "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-src 'self';"
+      "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-src *;"
     );
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("X-Frame-Options", "DENY");
@@ -194,12 +194,23 @@ app.get("/", (_req, res) => {
   res.sendFile(path.resolve("public/index.html"));
 });
 
+// Script injected into proxied HTML to neutralize iframe detection.
+// Runs before any SPA code — makes the page think it's the top-level window.
+const FRAME_BYPASS_SCRIPT = `<script>
+if (window.self !== window.top) {
+  try { Object.defineProperty(window, 'frameElement', { get: () => null }); } catch(e) {}
+  try { Object.defineProperty(window, 'top', { get: () => window.self }); } catch(e) {}
+  try { Object.defineProperty(window, 'parent', { get: () => window.self }); } catch(e) {}
+}
+</script>`;
+
 // ── Reverse proxy: everything else → MiiTel with Bearer token from cookie ──
 app.use(
   createProxyMiddleware({
     target: MIITEL_ORIGIN,
     changeOrigin: true,
-    ws: true, // proxy WebSocket connections too
+    ws: true,
+    selfHandleResponse: true, // required for responseInterceptor
     on: {
       proxyReq(proxyReq, req) {
         // Only inject token if the SPA's JS didn't already set one
@@ -213,18 +224,34 @@ app.use(
         // hostname (e.g. "trial0195-id" from "trial0195-id.miitel.jp"), but on
         // localhost it falls back to a dev tenant. Force the correct value.
         proxyReq.setHeader("X-TENANT-CODE", TENANT);
-        // Log proxied requests for debugging
+        // Override Referer/Origin so MiiTel's Cloudflare doesn't block localhost
+        proxyReq.setHeader("Referer", MIITEL_ORIGIN + req.url);
+        proxyReq.setHeader("Origin", MIITEL_ORIGIN);
         console.log(`[proxy] ${req.method} ${req.url} → ${MIITEL_ORIGIN}${req.url}`);
       },
-      proxyRes(proxyRes, req) {
+      proxyRes: responseInterceptor(async (buffer, proxyRes, req, res) => {
         // Strip headers that block iframe embedding
-        delete proxyRes.headers["x-frame-options"];
-        delete proxyRes.headers["content-security-policy"];
-        // Log response status for debugging
+        res.removeHeader("x-frame-options");
+        res.removeHeader("content-security-policy");
+
         if (proxyRes.statusCode >= 400) {
           console.log(`[proxy] ${req.method} ${req.url} ← ${proxyRes.statusCode}`);
         }
-      },
+
+        // Inject frame-bypass script into HTML responses
+        const contentType = proxyRes.headers["content-type"] || "";
+        if (contentType.includes("text/html")) {
+          const body = buffer.toString("utf8");
+          // Inject right after <head> so it runs before any SPA scripts
+          if (body.includes("<head")) {
+            return body.replace(/(<head[^>]*>)/i, `$1${FRAME_BYPASS_SCRIPT}`);
+          }
+          // Fallback: prepend if no <head> tag found
+          return FRAME_BYPASS_SCRIPT + body;
+        }
+
+        return buffer;
+      }),
     },
   })
 );
