@@ -143,6 +143,10 @@
 
         // Set localStorage tokens first, then create a fresh iframe
         await setMiitelTokens();
+        // Track expiry so we can detect auto-refresh later
+        const statusRes = await fetch("/_auth/status", { method: "POST", headers: CSRF_HEADERS });
+        const statusData = await statusRes.json();
+        lastExpiresAt = statusData.expiresAt || 0;
         log("Tokens set in localStorage for MiiTel SPA.");
         statusBox.textContent = "Status: Logged in";
         loadDashboard();
@@ -182,6 +186,30 @@
         // ignore
       }
     }
+
+    // Periodically check token status and log when auto-refresh happens
+    let lastExpiresAt = 0;
+    async function pollTokenStatus() {
+      try {
+        const res = await fetch("/_auth/status", {
+          method: "POST",
+          headers: CSRF_HEADERS,
+        });
+        const data = await res.json();
+        if (data.loggedIn && lastExpiresAt && data.expiresAt > lastExpiresAt) {
+          log("Token auto-refreshed. New expiry: " + new Date(data.expiresAt).toLocaleTimeString());
+          await setMiitelTokens();
+          log("localStorage tokens updated after refresh.");
+        }
+        if (data.loggedIn) {
+          lastExpiresAt = data.expiresAt;
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+    // Check every 60 seconds
+    setInterval(pollTokenStatus, 60 * 1000);
 
     document.getElementById("loginBtn").addEventListener("click", login);
     document.getElementById("logoutBtn").addEventListener("click", logout);
