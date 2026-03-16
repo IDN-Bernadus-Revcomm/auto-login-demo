@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Miitel Demo App</title>
   <style>
     body {
@@ -23,6 +24,9 @@
       border-radius: 8px;
       background: #2563eb;
       color: white;
+    }
+    button.logout {
+      background: #dc2626;
     }
     .status {
       padding: 10px 14px;
@@ -56,16 +60,16 @@
 
   <div class="toolbar">
     <button id="loginBtn" type="button">Login</button>
+    <button id="logoutBtn" type="button" class="logout">Logout</button>
   </div>
 
   <div class="status" id="status">Status: Not logged in</div>
-  <div class="log" id="logBox">Page loaded.\n</div>
+  <div class="log" id="logBox">Page loaded.
+</div>
 
-  <iframe
-    id="miitelFrame"
-    src="https://trial0195-id.miitel.jp/app/dashboard"
-    title="Miitel Dashboard">
-  </iframe>
+  <div id="iframeContainer">
+    <iframe id="miitelFrame" src="/app/login" title="Miitel Dashboard"></iframe>
+  </div>
 
   <script>
     const logBox = document.getElementById("logBox");
@@ -76,60 +80,113 @@
       logBox.textContent += message + "\n";
     }
 
+    // All /_auth requests must include X-Requested-With for CSRF protection
+    const CSRF_HEADERS = {
+      "Content-Type": "application/json",
+      "X-Requested-With": "XMLHttpRequest",
+    };
+
+    // Fetch tokens from server and set localStorage so the MiiTel SPA can read them.
+    // Parent page and iframe share localStorage because the proxy makes them same-origin.
+    async function setMiitelTokens() {
+      const res = await fetch("/_auth/tokens", {
+        method: "POST",
+        headers: CSRF_HEADERS,
+        credentials: "same-origin",
+      });
+      if (!res.ok) return false;
+      const tokens = await res.json();
+      localStorage.setItem("access_token", tokens.access_token);
+      localStorage.setItem("refresh_token", tokens.refresh_token);
+      localStorage.setItem("refresh_token_expires_at", tokens.refresh_token_expires_at);
+      localStorage.setItem("MT_currentAccess", String(Date.now()));
+      return true;
+    }
+
+    // Destroy and recreate the iframe to fully kill the SPA's in-memory state.
+    // Just changing src leaves the old JS running with stale tokens.
+    function resetIframe(src) {
+      const container = document.getElementById("iframeContainer");
+      container.innerHTML = "";
+      const iframe = document.createElement("iframe");
+      iframe.id = "miitelFrame";
+      iframe.title = "Miitel Dashboard";
+      iframe.src = src;
+      container.appendChild(iframe);
+    }
+
+    function loadDashboard() {
+      resetIframe("/app/dashboard?ts=" + Date.now());
+    }
+
     async function login() {
       try {
         log("Login button clicked.");
         statusBox.textContent = "Status: Sending login request...";
 
-        const res = await fetch("/api/login", {
+        const res = await fetch("/_auth/login", {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          }
+          headers: CSRF_HEADERS,
         });
 
         log("Response status: " + res.status);
 
-        const rawText = await res.text();
-        log("Raw response: " + rawText);
-
         if (!res.ok) {
+          const errText = await res.text();
+          log("Error: " + errText);
           statusBox.textContent = "Status: Login failed";
-          alert("Login failed. Check log.");
           return;
         }
 
-        const token = JSON.parse(rawText);
+        const data = await res.json();
+        log("Login successful. Token expires in " + data.expires_in + "s");
 
-        if (!token || !token.access_token) {
-          statusBox.textContent = "Status: Invalid token response";
-          alert("Invalid token response. Check log.");
-          return;
-        }
-
-        localStorage.setItem("demo_access_token", token.access_token || "");
-        localStorage.setItem("demo_refresh_token", token.refresh_token || "");
-        localStorage.setItem(
-          "demo_refresh_token_expires_at",
-          String(Math.floor(Date.now() / 1000) + (token.expires_in || 3600))
-        );
-        localStorage.setItem("demo_current_access_time", String(Date.now()));
-
-        log("Token saved to localStorage.");
-        statusBox.textContent = "Status: Logged in (demo)";
-
-        document.getElementById("miitelFrame").src =
-          "https://trial0195-id.miitel.jp/app/dashboard?ts=" + Date.now();
+        // Set localStorage tokens first, then create a fresh iframe
+        await setMiitelTokens();
+        log("Tokens set in localStorage for MiiTel SPA.");
+        statusBox.textContent = "Status: Logged in";
+        loadDashboard();
 
       } catch (err) {
         log("ERROR: " + err.message);
         statusBox.textContent = "Status: Error";
-        alert("Error: " + err.message);
+      }
+    }
+
+    async function logout() {
+      await fetch("/_auth/logout", { method: "POST", headers: CSRF_HEADERS });
+      localStorage.removeItem("access_token");
+      localStorage.removeItem("refresh_token");
+      localStorage.removeItem("refresh_token_expires_at");
+      localStorage.removeItem("MT_currentAccess");
+      // Destroy iframe completely to kill SPA's in-memory state
+      resetIframe("/app/login");
+      statusBox.textContent = "Status: Not logged in";
+      log("Logged out. Cookies and localStorage cleared.");
+    }
+
+    async function checkAuth() {
+      try {
+        const res = await fetch("/_auth/status", {
+          method: "POST",
+          headers: CSRF_HEADERS,
+        });
+        const data = await res.json();
+        if (data.loggedIn) {
+          statusBox.textContent = "Status: Logged in (session active)";
+          await setMiitelTokens();
+          loadDashboard();
+          log("Existing session detected.");
+        }
+      } catch (e) {
+        // ignore
       }
     }
 
     document.getElementById("loginBtn").addEventListener("click", login);
-    log("Login handler attached.");
+    document.getElementById("logoutBtn").addEventListener("click", logout);
+    checkAuth();
+    log("Ready.");
   </script>
 </body>
 </html>
