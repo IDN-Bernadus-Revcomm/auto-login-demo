@@ -230,9 +230,15 @@ app.use(
         console.log(`[proxy] ${req.method} ${req.url} → ${MIITEL_ORIGIN}${req.url}`);
       },
       proxyRes: responseInterceptor(async (buffer, proxyRes, req, res) => {
-        // Strip headers that block iframe embedding
+        // Strip headers that block iframe embedding — must delete from
+        // proxyRes.headers (the source) since responseInterceptor copies them
+        delete proxyRes.headers["x-frame-options"];
+        delete proxyRes.headers["content-security-policy"];
+        delete proxyRes.headers["content-security-policy-report-only"];
+        // Also remove from res in case they were already copied
         res.removeHeader("x-frame-options");
         res.removeHeader("content-security-policy");
+        res.removeHeader("content-security-policy-report-only");
 
         if (proxyRes.statusCode >= 400) {
           console.log(`[proxy] ${req.method} ${req.url} ← ${proxyRes.statusCode}`);
