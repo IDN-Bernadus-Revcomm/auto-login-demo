@@ -67,11 +67,9 @@
   <div class="log" id="logBox">Page loaded.
 </div>
 
-  <iframe
-    id="miitelFrame"
-    src="/app/login"
-    title="Miitel Dashboard">
-  </iframe>
+  <div id="iframeContainer">
+    <iframe id="miitelFrame" src="/app/login" title="Miitel Dashboard"></iframe>
+  </div>
 
   <script>
     const logBox = document.getElementById("logBox");
@@ -105,9 +103,20 @@
       return true;
     }
 
+    // Destroy and recreate the iframe to fully kill the SPA's in-memory state.
+    // Just changing src leaves the old JS running with stale tokens.
+    function resetIframe(src) {
+      const container = document.getElementById("iframeContainer");
+      container.innerHTML = "";
+      const iframe = document.createElement("iframe");
+      iframe.id = "miitelFrame";
+      iframe.title = "Miitel Dashboard";
+      iframe.src = src;
+      container.appendChild(iframe);
+    }
+
     function loadDashboard() {
-      document.getElementById("miitelFrame").src =
-        "/app/dashboard?ts=" + Date.now();
+      resetIframe("/app/dashboard?ts=" + Date.now());
     }
 
     async function login() {
@@ -132,7 +141,7 @@
         const data = await res.json();
         log("Login successful. Token expires in " + data.expires_in + "s");
 
-        // Set localStorage tokens, then load dashboard in iframe
+        // Set localStorage tokens first, then create a fresh iframe
         await setMiitelTokens();
         log("Tokens set in localStorage for MiiTel SPA.");
         statusBox.textContent = "Status: Logged in";
@@ -150,7 +159,8 @@
       localStorage.removeItem("refresh_token");
       localStorage.removeItem("refresh_token_expires_at");
       localStorage.removeItem("MT_currentAccess");
-      document.getElementById("miitelFrame").src = "/app/login";
+      // Destroy iframe completely to kill SPA's in-memory state
+      resetIframe("/app/login");
       statusBox.textContent = "Status: Not logged in";
       log("Logged out. Cookies and localStorage cleared.");
     }
